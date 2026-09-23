@@ -3,26 +3,35 @@ require('dotenv').config();
 
 const client = new Client({ checkUpdate: false });
 
-// Ayarlar - burayı düzenleyebilirsin
 let FARM_CHANNEL_ID = process.env.FARM_CHANNEL_ID || null;
 const KOMUTLAR = ['owo hunt', 'owo battle', 'owo pray', 'owo daily'];
-const ARALIK_SANIYE = 20; // her 20 saniyede bir komut atar
+const ARALIK_SANIYE = 20;
 
 client.on('ready', () => {
   console.log(`✅ ${client.user.username} olarak giriş yapıldı!`);
-  console.log(`📌 Farm kanalı: ${FARM_CHANNEL_ID || 'ayarlanmadı (!setkanal #kanal)'}`);
+  console.log(`📌 Farm kanalı: ${FARM_CHANNEL_ID || 'ayarlanmadı'}`);
   startFarm();
 });
 
 client.on('messageCreate', async (msg) => {
-  // !setkanal komutu ile kanal belirleme
-  if (msg.author.id === client.user.id && msg.content.startsWith('!setkanal')) {
+  if (msg.author.id !== client.user.id) return;
+
+  // !setkanal #kanal
+  if (msg.content.startsWith('!setkanal')) {
     const kanal = msg.mentions.channels.first();
-    if (!kanal) return msg.edit('❌ Kanal etiketle: `!setkanal #kanal`');
+    if (!kanal) {
+      try { await msg.channel.send('❌ Kullanım: `!setkanal #kanal` (kanalı etiketle)'); } catch(e){}
+      return;
+    }
     FARM_CHANNEL_ID = kanal.id;
-    msg.edit(`✅ Farm kanalı ayarlandı: <#${kanal.id}>`);
+    try { await msg.channel.send(`✅ Farm kanalı ayarlandı: <#${kanal.id}>`); } catch(e){}
     console.log(`📌 Yeni farm kanalı: ${kanal.id}`);
     startFarm();
+  }
+
+  // !id — bulunduğun kanalın ID'sini yazar
+  if (msg.content === '!id') {
+    try { await msg.channel.send(`Kanal ID: \`${msg.channel.id}\``); } catch(e){}
   }
 });
 
