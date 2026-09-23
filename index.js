@@ -4,8 +4,9 @@ require('dotenv').config();
 const client = new Client({ checkUpdate: false });
 
 let FARM_CHANNEL_ID = process.env.FARM_CHANNEL_ID || null;
-const KOMUTLAR = ['owo hunt', 'owo battle', 'owo pray', 'owo daily'];
-const ARALIK_SANIYE = 20;
+// Kumar komutları eklendi. Miktarı (100) kendine göre değiştirebilirsin.
+const KOMUTLAR = ['owo hunt', 'owo battle', 'owo cf 100', 'owo slots 100'];
+const ARALIK_SANIYE = 15; // 15 saniyeden aşağı düşürme, ban yersin!
 
 client.on('ready', () => {
   console.log(`✅ ${client.user.username} olarak giriş yapıldı!`);
@@ -16,7 +17,6 @@ client.on('ready', () => {
 client.on('messageCreate', async (msg) => {
   if (msg.author.id !== client.user.id) return;
 
-  // !setkanal #kanal
   if (msg.content.startsWith('!setkanal')) {
     const kanal = msg.mentions.channels.first();
     if (!kanal) {
@@ -27,11 +27,6 @@ client.on('messageCreate', async (msg) => {
     try { await msg.channel.send(`✅ Farm kanalı ayarlandı: <#${kanal.id}>`); } catch(e){}
     console.log(`📌 Yeni farm kanalı: ${kanal.id}`);
     startFarm();
-  }
-
-  // !id — bulunduğun kanalın ID'sini yazar
-  if (msg.content === '!id') {
-    try { await msg.channel.send(`Kanal ID: \`${msg.channel.id}\``); } catch(e){}
   }
 });
 
