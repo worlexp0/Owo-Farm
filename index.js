@@ -1,6 +1,7 @@
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
-  PermissionFlagsBits, ChannelType, EmbedBuilder
+  PermissionFlagsBits, ChannelType, EmbedBuilder,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType
 } = require('discord.js');
 const { Client: SelfbotClient } = require('discord.js-selfbot-v13');
 const http = require('http');
@@ -26,8 +27,6 @@ const OWO_BOT_ID = '408785106942164992';
 let FARM_KOMUTLARI = ['wh', 'wb'];
 
 const farms = new Map();
-// Bekleyen plan talepleri: Map<userId, { plan, username, requestedAt }>
-const bekleyenTalepler = new Map();
 
 // ====== HEALTH CHECK ======
 const PORT = process.env.PORT || 3000;
@@ -37,7 +36,6 @@ http.createServer((req, res) => {
     status: 'ok',
     bot: bot?.user?.tag || 'başlatılıyor',
     farms: farms.size,
-    bekleyen: bekleyenTalepler.size,
     uptime: Math.floor(process.uptime()) + 's',
   }));
 }).listen(PORT, () => console.log(`🌐 Health check: port ${PORT}`));
@@ -48,7 +46,6 @@ const bot = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages,
   ],
 });
 
@@ -57,27 +54,12 @@ const commands = [
   new SlashCommandBuilder()
     .setName('add')
     .setDescription('OwO hesap(lar)ını bota bağla')
-    .addStringOption(o => o.setName('tokens').setDescription('Token(lar) — boşluk/virgül ile ayır').setRequired(true))
+    .addStringOption(o => o.setName('tokens').setDescription('Token(lar)').setRequired(true))
     .toJSON(),
   new SlashCommandBuilder()
     .setName('plan_upgrade')
-    .setDescription('Plan yükseltme talebi gönder (Premium veya Admin)')
+    .setDescription('Plan yükseltme talebi aç (Premium veya Admin)')
     .addStringOption(o => o.setName('plan').setDescription('Premium veya Admin').setRequired(true))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName('onayla')
-    .setDescription('[Admin] Plan talebini onayla')
-    .addUserOption(o => o.setName('kullanici').setDescription('Kullanıcı').setRequired(true))
-    .addStringOption(o => o.setName('plan').setDescription('Premium veya Admin').setRequired(true))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName('reddet')
-    .setDescription('[Admin] Plan talebini reddet')
-    .addUserOption(o => o.setName('kullanici').setDescription('Kullanıcı').setRequired(true))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName('bekleyenler')
-    .setDescription('[Admin] Bekleyen plan taleplerini göster')
     .toJSON(),
   new SlashCommandBuilder()
     .setName('komut_ekle')
@@ -98,20 +80,12 @@ const commands = [
     .toJSON(),
 ];
 
-// ====== ADMIN Mİ? ======
-function adminMi(interaction) {
-  if (!interaction.guild) return false;
-  return interaction.guild.ownerId === interaction.user.id;
-}
-
 // ====== BOT HAZIR ======
 bot.once('ready', async () => {
   console.log('=================================');
   console.log(`✅ BOT HAZIR: ${bot.user.tag}`);
-  console.log(`🆔 Bot ID: ${bot.user.id}`);
   console.log(`🏠 Yetkili Sunucu: ${SUNUCU_ID}`);
   console.log(`📊 Sunucu sayısı: ${bot.guilds.cache.size}`);
-  console.log(`🔔 Webhook: ${WEBHOOK_URL ? 'AKTİF' : 'kapalı'}`);
   console.log(`📋 Komutlar: ${FARM_KOMUTLARI.join(', ')}`);
   console.log('=================================');
 
@@ -123,7 +97,6 @@ bot.once('ready', async () => {
     console.error('❌ Komut kayıt hatası:', e.message);
   }
 
-  // Yetkisiz sunuculardan çık
   for (const [guildId, guild] of bot.guilds.cache) {
     if (guildId !== SUNUCU_ID) {
       console.log(`🚫 Yetkisiz sunucu: ${guild.name} — çıkıyorum.`);
@@ -134,15 +107,12 @@ bot.once('ready', async () => {
 
 bot.on('error', (e) => console.error('❌ Bot hatası:', e.message));
 bot.on('warn', (w) => console.warn('⚠️ Uyarı:', w));
-bot.on('shardError', (e) => console.error('❌ Shard hatası:', e.message));
 
 // ====== YETKİSİZ SUNUCUDAN ÇIK ======
 bot.on('guildCreate', async (guild) => {
   if (guild.id !== SUNUCU_ID) {
     console.log(`🚫 Yetkisiz sunucu: ${guild.name} — çıkıyorum.`);
     await guild.leave().catch(() => {});
-  } else {
-    console.log(`✅ Sunucuya katıldım: ${guild.name}`);
   }
 });
 
@@ -150,7 +120,6 @@ bot.on('guildCreate', async (guild) => {
 bot.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  // Yetkisiz sunucu kontrolü
   if (interaction.guild && interaction.guild.id !== SUNUCU_ID) {
     await interaction.reply({ content: '🚫 Yetkisiz sunucu.', ephemeral: true }).catch(() => {});
     setTimeout(() => interaction.guild.leave().catch(() => {}), 3000);
@@ -253,11 +222,10 @@ bot.on('interactionCreate', async (interaction) => {
       await interaction.followUp({ content: ozet, ephemeral: true });
     }
 
-    // ====== /plan_upgrade (TALEP GÖNDER) ======
+    // ====== /plan_upgrade (TALEP KANALI AÇAR) ======
     else if (interaction.commandName === 'plan_upgrade') {
       const plan = interaction.options.getString('plan');
 
-      // Geçersiz plan adı
       if (!PLANLAR.includes(plan)) {
         const embed = new EmbedBuilder()
           .setTitle('📋 Mevcut Planlar')
@@ -270,7 +238,7 @@ bot.on('interactionCreate', async (interaction) => {
         return interaction.reply({ embeds: [embed], ephemeral: true });
       }
 
-      // Free'ye düşürmek serbest
+      // Free'ye düşürme serbest
       if (plan === 'Free') {
         for (const [, f] of farms.entries()) {
           if (f.userId === interaction.user.id) f.plan = 'Free';
@@ -278,9 +246,8 @@ bot.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: '✅ Plan **Free** olarak ayarlandı.', ephemeral: true });
       }
 
-      // Sunucu sahibi → direkt yükseltir, talep gerekmez
+      // Sunucu sahibi direkt yükseltir
       if (interaction.guild && interaction.guild.ownerId === interaction.user.id) {
-        // Direkt uygula
         const kanalAdi = `plan-${plan.toLowerCase()}-${interaction.user.username}`
           .toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 90);
 
@@ -304,157 +271,69 @@ bot.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // Normal kullanıcı → talep oluştur
-      bekleyenTalepler.set(interaction.user.id, {
-        plan,
-        username: interaction.user.username,
-        requestedAt: Date.now(),
-      });
+      // Normal kullanıcı → talep kanalı aç
+      await interaction.deferReply({ ephemeral: true });
 
-      // Sunucu sahibine DM at
-      let dmDurumu = '✅';
-      try {
-        const sahip = await bot.users.fetch(interaction.guild.ownerId);
-        await sahip.send(
-          `📩 **YENİ PLAN TALEBİ**\n\n` +
-          `👤 **Kullanıcı:** ${interaction.user.username} (\`${interaction.user.id}\`)\n` +
-          `📊 **İstediği plan:** ${plan}\n` +
-          `🏠 **Sunucu:** ${interaction.guild.name}\n` +
-          `⏰ **Zaman:** <t:${Math.floor(Date.now() / 1000)}:R>\n\n` +
-          `**Onaylamak için:**\n` +
-          `\`/onayla kullanici:@${interaction.user.username} plan:${plan}\`\n\n` +
-          `**Reddetmek için:**\n` +
-          `\`/reddet kullanici:@${interaction.user.username}\``
-        );
-      } catch (e) {
-        dmDurumu = '⚠️ DM atılamadı';
-        console.log('❌ DM hatası:', e.message);
-      }
+      const kanalAdi = `talep-${interaction.user.username}`.toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-').slice(0, 90);
 
-      return interaction.reply({
-        content:
-          `⏳ Talebin sunucu sahibine iletildi. Onay bekleniyor...\n` +
-          `📊 İstenen plan: **${plan}**\n` +
-          `🆔 Talep ID: \`${interaction.user.id}\`\n` +
-          `ℹ️ ${dmDurumu}`,
-        ephemeral: true,
-      });
-    }
-
-    // ====== /onayla (SADECE SUNUCU SAHİBİ) ======
-    else if (interaction.commandName === 'onayla') {
-      if (!adminMi(interaction)) {
-        return interaction.reply({ content: '❌ Bu komutu sadece **sunucu sahibi** kullanabilir.', ephemeral: true });
-      }
-
-      const hedef = interaction.options.getUser('kullanici');
-      const plan = interaction.options.getString('plan');
-
-      if (!PLANLAR.includes(plan) || plan === 'Free') {
-        return interaction.reply({ content: '❌ Geçersiz plan. **Premium** veya **Admin** olmalı.', ephemeral: true });
-      }
-
-      const talep = bekleyenTalepler.get(hedef.id);
-      if (!talep) {
-        return interaction.reply({ content: `❌ ${hedef.username} için bekleyen talep yok.`, ephemeral: true });
-      }
-
-      // Plan uygula
-      let guncellenen = 0;
-      for (const [, f] of farms.entries()) {
-        if (f.userId === hedef.id) { f.plan = plan; guncellenen++; }
-      }
-      bekleyenTalepler.delete(hedef.id);
-
-      // Özel kanal aç
-      let kanalId = null;
-      try {
-        const kanalAdi = `plan-${plan.toLowerCase()}-${hedef.username}`
-          .toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 90);
-
-        const overwrites = [
+      const talepKanal = await interaction.guild.channels.create({
+        name: kanalAdi,
+        type: ChannelType.GuildText,
+        topic: `Plan talebi: ${plan} • Kullanıcı: ${interaction.user.id}`,
+        permissionOverwrites: [
           { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: hedef.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-          { id: interaction.guild.ownerId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
-        ];
-
-        const channel = await interaction.guild.channels.create({
-          name: kanalAdi,
-          type: ChannelType.GuildText,
-          permissionOverwrites: overwrites,
-        });
-        kanalId = channel.id;
-      } catch (e) {
-        console.log('❌ Kanal açma hatası:', e.message);
-      }
-
-      // Kullanıcıya DM at
-      try {
-        await hedef.send(
-          `✅ **Planın onaylandı!**\n\n` +
-          `📊 Yeni plan: **${plan}**\n` +
-          `🔢 Yeni limit: **${PLAN_LIMITLERI[plan]}** hesap\n` +
-          (kanalId ? `📌 Özel kanal: <#${kanalId}>\n` : '') +
-          `\nArtık \`/add\` ile daha fazla token ekleyebilirsin.`
-        );
-      } catch (e) {
-        console.log('⚠️ Kullanıcıya DM atılamadı:', e.message);
-      }
-
-      return interaction.reply({
-        content:
-          `✅ **${hedef.username}** kullanıcısının planı **${plan}** olarak onaylandı.\n` +
-          `🔄 Güncellenen hesap: **${guncellenen}**\n` +
-          `📊 Yeni limit: **${PLAN_LIMITLERI[plan]}**\n` +
-          (kanalId ? `📌 Kanal: <#${kanalId}>` : '⚠️ Kanal açılamadı'),
-        ephemeral: true,
+          {
+            id: interaction.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+            ],
+          },
+          {
+            id: interaction.guild.ownerId,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.ReadMessageHistory,
+              PermissionFlagsBits.ManageChannels,
+            ],
+          },
+        ],
       });
-    }
 
-    // ====== /reddet (SADECE SUNUCU SAHİBİ) ======
-    else if (interaction.commandName === 'reddet') {
-      if (!adminMi(interaction)) {
-        return interaction.reply({ content: '❌ Bu komutu sadece **sunucu sahibi** kullanabilir.', ephemeral: true });
-      }
-
-      const hedef = interaction.options.getUser('kullanici');
-      const talep = bekleyenTalepler.get(hedef.id);
-      if (!talep) {
-        return interaction.reply({ content: `❌ ${hedef.username} için bekleyen talep yok.`, ephemeral: true });
-      }
-
-      bekleyenTalepler.delete(hedef.id);
-
-      try {
-        await hedef.send(`❌ Plan talebin (\`${talep.plan}\`) **reddedildi**.`);
-      } catch (e) {}
-
-      return interaction.reply({ content: `🗑️ **${hedef.username}** kullanıcısının talebi reddedildi.`, ephemeral: true });
-    }
-
-    // ====== /bekleyenler (SADECE SUNUCU SAHİBİ) ======
-    else if (interaction.commandName === 'bekleyenler') {
-      if (!adminMi(interaction)) {
-        return interaction.reply({ content: '❌ Bu komutu sadece **sunucu sahibi** kullanabilir.', ephemeral: true });
-      }
-
-      if (bekleyenTalepler.size === 0) {
-        return interaction.reply({ content: '📭 Bekleyen talep yok.', ephemeral: true });
-      }
-
-      const liste = [];
-      for (const [userId, talep] of bekleyenTalepler.entries()) {
-        const dakika = Math.floor((Date.now() - talep.requestedAt) / 60000);
-        liste.push(`👤 <@${userId}> (\`${talep.username}\`)\n   📊 Plan: **${talep.plan}** • ⏰ ${dakika} dk önce`);
-      }
-
+      // Talep mesajı
       const embed = new EmbedBuilder()
-        .setTitle('📋 Bekleyen Plan Talepleri')
+        .setTitle('📩 Plan Yükseltme Talebi')
         .setColor(0xFFA500)
-        .setDescription(liste.join('\n\n'))
-        .setFooter({ text: `Toplam: ${bekleyenTalepler.size} talep` });
+        .setDescription(
+          `👤 **Kullanıcı:** <@${interaction.user.id}> (\`${interaction.user.username}\`)\n` +
+          `📊 **İstenen plan:** **${plan}**\n` +
+          `🔢 **Yeni limit:** ${PLAN_LIMITLERI[plan]} hesap\n` +
+          `⏰ **Zaman:** <t:${Math.floor(Date.now() / 1000)}:R>\n\n` +
+          `Sunucu sahibi aşağıdaki butonlarla onaylayabilir.`
+        )
+        .setFooter({ text: 'Sadece sunucu sahibi onaylayabilir.' });
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`onayla_${interaction.user.id}_${plan}`)
+          .setLabel('Onayla')
+          .setStyle(ButtonStyle.Success)
+          .setEmoji('✅'),
+        new ButtonBuilder()
+          .setCustomId(`reddet_${interaction.user.id}_${plan}`)
+          .setLabel('Reddet')
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji('❌'),
+      );
+
+      await talepKanal.send({ content: `<@${interaction.guild.ownerId}> yeni talep!`, embeds: [embed], components: [row] });
+
+      await interaction.editReply({
+        content: `✅ Talep kanalı açıldı: <#${talepKanal.id}>\nSunucu sahibi onaylayınca planın aktif olacak.`,
+      });
     }
 
     // ====== /komut_ekle ======
@@ -471,7 +350,7 @@ bot.on('interactionCreate', async (interaction) => {
     else if (interaction.commandName === 'komut_sil') {
       const sil = interaction.options.getString('komut').trim();
       const idx = FARM_KOMUTLARI.indexOf(sil);
-      if (idx === -1) return interaction.reply({ content: `❌ Bulunamadı: \`${sil}\``, ephemeral: true });
+      if (idx === -1) return interaction.reply({ content: `❌ Bulunamadı.`, ephemeral: true });
       if (FARM_KOMUTLARI.length <= 1) return interaction.reply({ content: '❌ En az 1 komut kalmalı.', ephemeral: true });
       FARM_KOMUTLARI.splice(idx, 1);
       return interaction.reply({ content: `🗑️ Silindi: \`${sil}\`\n📋 ${FARM_KOMUTLARI.map(k => `\`${k}\``).join(', ')}`, ephemeral: true });
@@ -496,4 +375,128 @@ bot.on('interactionCreate', async (interaction) => {
     else if (interaction.commandName === 'komut_ayarla') {
       const raw = interaction.options.getString('komutlar');
       const yeni = raw.split(',').map(k => k.trim()).filter(k => k.length > 0);
-      if (yeni.length === 0) return interaction.reply({ content: '❌ Boş.', ephemer
+      if (yeni.length === 0 || yeni.length > 20) return interaction.reply({ content: '❌ 1-20 komut.', ephemeral: true });
+      FARM_KOMUTLARI = yeni;
+      return interaction.reply({ content: `✅ Güncellendi (${FARM_KOMUTLARI.length}): ${FARM_KOMUTLARI.map(k => `\`${k}\``).join(', ')}`, ephemeral: true });
+    }
+  } catch (e) {
+    console.error('❌ Interaction hatası:', e);
+    try {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: `❌ Hata: ${e.message}`, ephemeral: true });
+      } else if (interaction.deferred) {
+        await interaction.editReply({ content: `❌ Hata: ${e.message}` });
+      } else {
+        await interaction.followUp({ content: `❌ Hata: ${e.message}`, ephemeral: true });
+      }
+    } catch (_) {}
+  }
+});
+
+// ====== BUTON İŞLEYİCİ (ONAYLA / REDDET) ======
+bot.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const [aksiyon, hedefId, plan] = interaction.customId.split('_');
+  if (aksiyon !== 'onayla' && aksiyon !== 'reddet') return;
+
+  // Sadece sunucu sahibi
+  if (!interaction.guild || interaction.guild.ownerId !== interaction.user.id) {
+    return interaction.reply({ content: '❌ Sadece **sunucu sahibi** bu butona basabilir.', ephemeral: true });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  if (aksiyon === 'onayla') {
+    // Planı aktif et
+    let guncellenen = 0;
+    for (const [, f] of farms.entries()) {
+      if (f.userId === hedefId) { f.plan = plan; guncellenen++; }
+    }
+
+    // Kullanıcıya özel plan kanalı aç
+    let planKanalId = null;
+    try {
+      const hedefUser = await bot.users.fetch(hedefId);
+      const kanalAdi = `plan-${plan.toLowerCase()}-${hedefUser.username}`
+        .toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 90);
+
+      const channel = await interaction.guild.channels.create({
+        name: kanalAdi,
+        type: ChannelType.GuildText,
+        permissionOverwrites: [
+          { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: hedefId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+          { id: interaction.guild.ownerId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        ],
+      });
+      planKanalId = channel.id;
+
+      await channel.send(`🎉 <@${hedefId}> planın **${plan}** olarak onaylandı! Yeni limit: **${PLAN_LIMITLERI[plan]}** hesap.`);
+    } catch (e) {
+      console.log('❌ Plan kanalı açma hatası:', e.message);
+    }
+
+    // Buton mesajını güncelle
+    try {
+      const eskiEmbed = interaction.message.embeds[0];
+      const yeniEmbed = EmbedBuilder.from(eskiEmbed)
+        .setColor(0x00FF00)
+        .setTitle('✅ Talep Onaylandı')
+        .setFooter({ text: `Onaylayan: ${interaction.user.username}` });
+      await interaction.message.edit({ embeds: [yeniEmbed], components: [] });
+    } catch (e) {}
+
+    // Talep kanalını sil
+    setTimeout(async () => {
+      try { await interaction.channel.delete(); } catch (e) {}
+    }, 5000);
+
+    await interaction.editReply({
+      content:
+        `✅ **${plan}** planı <@${hedefId}> için onaylandı.\n` +
+        `🔄 Güncellenen hesap: **${guncellenen}**\n` +
+        `📊 Yeni limit: **${PLAN_LIMITLERI[plan]}**\n` +
+        (planKanalId ? `📌 Plan kanalı: <#${planKanalId}>` : '⚠️ Plan kanalı açılamadı'),
+    });
+  } else if (aksiyon === 'reddet') {
+    try {
+      const eskiEmbed = interaction.message.embeds[0];
+      const yeniEmbed = EmbedBuilder.from(eskiEmbed)
+        .setColor(0xFF0000)
+        .setTitle('❌ Talep Reddedildi')
+        .setFooter({ text: `Reddeden: ${interaction.user.username}` });
+      await interaction.message.edit({ embeds: [yeniEmbed], components: [] });
+    } catch (e) {}
+
+    setTimeout(async () => {
+      try { await interaction.channel.delete(); } catch (e) {}
+    }, 5000);
+
+    await interaction.editReply({ content: `🗑️ <@${hedefId}> kullanıcısının talebi reddedildi.` });
+  }
+});
+
+// ====== FARM DÖNGÜSÜ + CAPTCHA ======
+function startFarm(token) {
+  const farm = farms.get(token);
+  if (!farm) return;
+
+  if (!farm.captchaListenerEklendi) {
+    farm.captchaListenerEklendi = true;
+
+    farm.selfbot.on('messageCreate', async (msg) => {
+      if (msg.author.id !== OWO_BOT_ID) return;
+      const icerik = msg.content.toLowerCase();
+      const captchaVar =
+        icerik.includes('captcha') || icerik.includes('verify') ||
+        icerik.includes('human') || icerik.includes('are you a') ||
+        icerik.includes('please complete');
+
+      if (captchaVar || msg.components.length > 0) {
+        console.log(`🛑 [${farm.selfbot.user.username}] CAPTCHA!`);
+        farm.stopped = true;
+        if (farm.timeout) clearTimeout(farm.timeout);
+
+        if (WEBHOOK_URL) {
+          
