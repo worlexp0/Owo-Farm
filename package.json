@@ -1,11 +1,12 @@
 {
-  "name": "owo-farm",
-  "version": "1.0.0",
+  "name": "owo-multibot",
+  "version": "3.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "discord.js": "^14.16.3",
     "discord.js-selfbot-v13": "^3.1.4",
     "dotenv": "^16.4.5"
   }
