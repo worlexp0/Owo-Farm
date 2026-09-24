@@ -3,6 +3,8 @@ const {
   PermissionFlagsBits, ChannelType, EmbedBuilder
 } = require('discord.js');
 const { Client: SelfbotClient } = require('discord.js-selfbot-v13');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 // ====== ORTAM ======
@@ -15,12 +17,41 @@ if (!OWNER_ID) { console.error('❌ OWNER_ID eksik!'); process.exit(1); }
 
 // ====== AYARLAR ======
 const PLANLAR = ['Free', 'Premium', 'Admin'];
-const FARM_KOMUTLARI = ['wh', 'wb'];
+const PLAN_LIMITLERI = { Free: 5, Premium: 10, Admin: 25 };
 const MIN_SANIYE = 22;
 const MAX_SANIYE = 28;
 const OWO_BOT_ID = '408785106942164992';
 
-// Map<token, { selfbot, userId, channelId, guildId, plan, timeout, stopped }>
+// ====== KOMUT LİSTESİ (JSON'DAN OKU) ======
+const AYAR_DOSYA = path.join(__dirname, 'ayarlar.json');
+let FARM_KOMUTLARI = ['wh', 'wb'];
+
+function ayarlariYukle() {
+  try {
+    if (fs.existsSync(AYAR_DOSYA)) {
+      const veri = JSON.parse(fs.readFileSync(AYAR_DOSYA, 'utf8'));
+      if (Array.isArray(veri.komutlar) && veri.komutlar.length > 0) {
+        FARM_KOMUTLARI = veri.komutlar;
+        console.log(`📋 Komutlar yüklendi: ${FARM_KOMUTLARI.join(', ')}`);
+      }
+    }
+  } catch (e) {
+    console.log('⚠️ ayarlar.json okunamadı, varsayılan kullanılıyor.');
+  }
+}
+
+function ayarlariKaydet() {
+  try {
+    fs.writeFileSync(AYAR_DOSYA, JSON.stringify({ komutlar: FARM_KOMUTLARI }, null, 2));
+    console.log(`💾 Komutlar kaydedildi: ${FARM_KOMUTLARI.join(', ')}`);
+  } catch (e) {
+    console.log('❌ Kaydetme hatası:', e.message);
+  }
+}
+
+ayarlariYukle();
+
+// Map<token, { selfbot, userId, channelId, guildId, plan, timeout, stopped, captchaListenerEklendi }>
 const farms = new Map();
 
 // ====== DISCORD BOT ======
@@ -51,6 +82,43 @@ const commands = [
         .setDescription('Premium veya Admin')
         .setRequired(true))
     .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('komut_ekle')
+    .setDescription('Farm listesine yeni komut ekle')
+    .addStringOption(o =>
+      o.setName('komut')
+        .setDescription('Eklenecek komut (örn: owo hunt)')
+        .setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('komut_sil')
+    .setDescription('Farm listesinden komut sil')
+    .addStringOption(o =>
+      o.setName('komut')
+        .setDescription('Silinecek komut')
+        .setRequired(true))
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('komut_liste')
+    .setDescription('Farm listesindeki komutları göster')
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('komut_temizle')
+    .setDescription('Farm listesini varsayılana sıfırla (wh, wb)')
+    .toJSON(),
+
+  new SlashCommandBuilder()
+    .setName('komut_ayarla')
+    .setDescription('Farm listesini komple değiştir (virgülle ayır)')
+    .addStringOption(o =>
+      o.setName('komutlar')
+        .setDescription('Örn: wh,wb,owo hunt')
+        .setRequired(true))
+    .toJSON(),
 ];
 
 // ====== BOT HAZIR ======
@@ -58,6 +126,7 @@ bot.once('ready', async () => {
   console.log(`✅ Bot hazır: ${bot.user.tag}`);
   console.log(`👑 Owner ID: ${OWNER_ID}`);
   console.log(`🔔 Webhook: ${WEBHOOK_URL ? 'AKTİF' : 'kapalı'}`);
+  console.log(`📋 Farm komutları: ${FARM_KOMUTLARI.join(', ')}`);
 
   const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
   try {
@@ -103,8 +172,46 @@ bot.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: '❌ Geçerli token bulunamadı.', ephemeral: true });
     }
 
+    let kullaniciPlani = 'Free';
+    for (const [, f] of farms.entries()) {
+      if (f.userId === interaction.user.id) {
+        kullaniciPlani = f.plan;
+        break;
+      }
+    }
+    if (interaction.user.id === OWNER_ID) kullaniciPlani = 'Admin';
+
+    const limit = PLAN_LIMITLERI[kullaniciPlani];
+
+    let mevcutSayi = 0;
+    for (const [, f] of farms.entries()) {
+      if (f.userId === interaction.user.id) mevcutSayi++;
+    }
+
+    const kalan = limit - mevcutSayi;
+
+    if (kalan <= 0) {
+      return interaction.reply({
+        content:
+          `❌ **Limit doldu!**\n` +
+          `📊 Plan: **${kullaniciPlani}** (max ${limit} hesap)\n` +
+          `🔢 Mevcut: **${mevcutSayi}**\n` +
+          `💡 Daha fazla eklemek için: \`/plan_upgrade plan:Premium\` veya \`plan:Admin\``,
+        ephemeral: true,
+      });
+    }
+
+    let eklenecekler = tokens;
+    let limitUyarisi = '';
+    if (tokens.length > kalan) {
+      eklenecekler = tokens.slice(0, kalan);
+      limitUyarisi =
+        `\n⚠️ **Limit nedeniyle sadece ilk ${kalan} token eklendi.** ` +
+        `(Plan: ${kullaniciPlani}, max ${limit}, kalan ${kalan})`;
+    }
+
     await interaction.reply({
-      content: `⏳ **${tokens.length}** token işleniyor... Bu işlem biraz sürebilir.`,
+      content: `⏳ **${eklenecekler.length}** token işleniyor...${limitUyarisi}`,
       ephemeral: true,
     });
 
@@ -113,8 +220,8 @@ bot.on('interactionCreate', async (interaction) => {
     const hatalar = [];
     const basariliHesaplar = [];
 
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i];
+    for (let i = 0; i < eklenecekler.length; i++) {
+      const token = eklenecekler[i];
 
       if (farms.has(token)) {
         basarisiz++;
@@ -137,26 +244,31 @@ bot.on('interactionCreate', async (interaction) => {
           userId: interaction.user.id,
           channelId: interaction.channelId,
           guildId: interaction.guildId,
-          plan: 'Free',
+          plan: kullaniciPlani,
           timeout: null,
           stopped: false,
+          captchaListenerEklendi: false,
         });
 
         startFarm(token);
         basarili++;
         basariliHesaplar.push(sb.user.username);
 
-        await new Promise(r => setTimeout(r, 1000)); // rate limit önleme
+        await new Promise(r => setTimeout(r, 1000));
       } catch (e) {
         basarisiz++;
         hatalar.push(`#${i + 1}: ${e.message.slice(0, 60)}`);
       }
     }
 
+    const yeniToplam = mevcutSayi + basarili;
+
     let ozet = `✅ **Başarılı:** ${basarili}\n❌ **Başarısız:** ${basarisiz}\n`;
+    ozet += `📊 **Plan:** ${kullaniciPlani} (${yeniToplam}/${limit})\n`;
     ozet += `📌 Kanal: <#${interaction.channelId}>\n`;
     ozet += `⏱️ Aralık: ${MIN_SANIYE}–${MAX_SANIYE} saniye\n`;
-    ozet += `🎮 Komutlar: \`wh\`, \`wb\`\n`;
+    ozet += `🎮 Komutlar: ${FARM_KOMUTLARI.map(k => `\`${k}\``).join(', ')}\n`;
+    if (limitUyarisi) ozet += limitUyarisi;
 
     if (basariliHesaplar.length > 0) {
       ozet += `\n**Bağlananlar:**\n${basariliHesaplar.slice(0, 20).join(', ')}`;
@@ -182,9 +294,9 @@ bot.on('interactionCreate', async (interaction) => {
         .setTitle('📋 Mevcut Planlar')
         .setColor(0x5865F2)
         .setDescription(
-          '**Free** — Sadece `/add`, 22–28 sn aralık, sınırsız token\n' +
-          '**Premium** — Özel kanal, öncelikli farm, 3 hesap\n' +
-          '**Admin** — Sınırsız hesap, tüm özellikler'
+          '**Free** — 5 hesap, 22–28 sn aralık\n' +
+          '**Premium** — 10 hesap, özel kanal, öncelikli farm\n' +
+          '**Admin** — 25 hesap, sınırsız özellik'
         );
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
@@ -236,21 +348,101 @@ bot.on('interactionCreate', async (interaction) => {
         content:
           `✅ Plan **${plan}** aktifleştirildi!\n` +
           `📌 Özel kanal: <#${channel.id}>\n` +
-          `🔄 Güncellenen hesap: **${guncellenen}**`,
+          `🔄 Güncellenen hesap: **${guncellenen}**\n` +
+          `📊 Yeni limit: **${PLAN_LIMITLERI[plan]}** hesap`,
         ephemeral: true,
       });
     } catch (e) {
       await interaction.reply({ content: `❌ Kanal oluşturma hatası: ${e.message}`, ephemeral: true });
     }
   }
+
+  // ====== /komut_ekle ======
+  if (interaction.commandName === 'komut_ekle') {
+    const yeni = interaction.options.getString('komut').trim();
+    if (!yeni) return interaction.reply({ content: '❌ Boş komut.', ephemeral: true });
+    if (FARM_KOMUTLARI.includes(yeni)) {
+      return interaction.reply({ content: `⚠️ Zaten ekli: \`${yeni}\``, ephemeral: true });
+    }
+    if (FARM_KOMUTLARI.length >= 20) {
+      return interaction.reply({ content: '❌ Max 20 komut eklenebilir.', ephemeral: true });
+    }
+    FARM_KOMUTLARI.push(yeni);
+    ayarlariKaydet();
+    return interaction.reply({
+      content: `✅ Eklendi: \`${yeni}\`\n📋 Liste (${FARM_KOMUTLARI.length}): ${FARM_KOMUTLARI.map(k => `\`${k}\``).join(', ')}`,
+      ephemeral: true,
+    });
+  }
+
+  // ====== /komut_sil ======
+  if (interaction.commandName === 'komut_sil') {
+    const sil = interaction.options.getString('komut').trim();
+    const idx = FARM_KOMUTLARI.indexOf(sil);
+    if (idx === -1) {
+      return interaction.reply({ content: `❌ Bulunamadı: \`${sil}\``, ephemeral: true });
+    }
+    if (FARM_KOMUTLARI.length <= 1) {
+      return interaction.reply({ content: '❌ En az 1 komut kalmalı. `/komut_ayarla` kullan.', ephemeral: true });
+    }
+    FARM_KOMUTLARI.splice(idx, 1);
+    ayarlariKaydet();
+    return interaction.reply({
+      content: `🗑️ Silindi: \`${sil}\`\n📋 Liste (${FARM_KOMUTLARI.length}): ${FARM_KOMUTLARI.map(k => `\`${k}\``).join(', ')}`,
+      ephemeral: true,
+    });
+  }
+
+  // ====== /komut_liste ======
+  if (interaction.commandName === 'komut_liste') {
+    const embed = new EmbedBuilder()
+      .setTitle('📋 Farm Komut Listesi')
+      .setColor(0x00FF99)
+      .setDescription(
+        FARM_KOMUTLARI.map((k, i) => `**${i + 1}.** \`${k}\``).join('\n') +
+        `\n\n⏱️ Aralık: **${MIN_SANIYE}–${MAX_SANIYE}** saniye`
+      );
+    return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  // ====== /komut_temizle ======
+  if (interaction.commandName === 'komut_temizle') {
+    FARM_KOMUTLARI = ['wh', 'wb'];
+    ayarlariKaydet();
+    return interaction.reply({
+      content: `🧹 Sıfırlandı: ${FARM_KOMUTLARI.map(k => `\`${k}\``).join(', ')}`,
+      ephemeral: true,
+    });
+  }
+
+  // ====== /komut_ayarla ======
+  if (interaction.commandName === 'komut_ayarla') {
+    const raw = interaction.options.getString('komutlar');
+    const yeni = raw
+      .split(',')
+      .map(k => k.trim())
+      .filter(k => k.length > 0);
+
+    if (yeni.length === 0) {
+      return interaction.reply({ content: '❌ Geçerli komut yok.', ephemeral: true });
+    }
+    if (yeni.length > 20) {
+      return interaction.reply({ content: '❌ Max 20 komut.', ephemeral: true });
+    }
+    FARM_KOMUTLARI = yeni;
+    ayarlariKaydet();
+    return interaction.reply({
+      content: `✅ Liste güncellendi (${FARM_KOMUTLARI.length}): ${FARM_KOMUTLARI.map(k => `\`${k}\``).join(', ')}`,
+      ephemeral: true,
+    });
+  }
 });
 
-// ====== FARM DÖNGÜSÜ + CAPTCHA DİNLEYİCİ ======
+// ====== FARM DÖNGÜSÜ + CAPTCHA ======
 function startFarm(token) {
   const farm = farms.get(token);
   if (!farm) return;
 
-  // Captcha dinleyici (aynı selfbot'a iki kere eklenmesin)
   if (!farm.captchaListenerEklendi) {
     farm.captchaListenerEklendi = true;
 
@@ -271,7 +463,6 @@ function startFarm(token) {
         farm.stopped = true;
         if (farm.timeout) clearTimeout(farm.timeout);
 
-        // Webhook bildirimi
         if (WEBHOOK_URL) {
           try {
             await fetch(WEBHOOK_URL, {
@@ -290,7 +481,6 @@ function startFarm(token) {
           }
         }
 
-        // Butona bas
         if (msg.components.length > 0) {
           try {
             await msg.clickButton();
@@ -300,7 +490,6 @@ function startFarm(token) {
           }
         }
 
-        // 90 sn sonra devam
         setTimeout(() => {
           farm.stopped = false;
           startFarm(token);
@@ -317,9 +506,14 @@ function startFarm(token) {
       const channel = await farm.selfbot.channels.fetch(farm.channelId);
       if (!channel) throw new Error('Kanal bulunamadı');
 
-      const komut = FARM_KOMUTLARI[Math.floor(Math.random() * FARM_KOMUTLARI.length)];
-      await channel.send(komut);
-      console.log(`[${farm.selfbot.user.username}] 📤 ${komut}`);
+      // Güncel listeyi her seferinde kullan (dinamik)
+      if (FARM_KOMUTLARI.length === 0) {
+        console.log('⚠️ Komut listesi boş, atlanıyor.');
+      } else {
+        const komut = FARM_KOMUTLARI[Math.floor(Math.random() * FARM_KOMUTLARI.length)];
+        await channel.send(komut);
+        console.log(`[${farm.selfbot.user.username}] 📤 ${komut}`);
+      }
     } catch (e) {
       console.log(`[${token.slice(0, 12)}...] ❌ ${e.message}`);
     }
